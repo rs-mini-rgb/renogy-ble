@@ -560,4 +560,75 @@ REGISTER_MAP: RegisterMap = {
             "offset": 3,
         },
     },
+    # Inverter device type (RIV1220PU and similar)
+    "inverter": {
+        # Main sensors (register 4000, 32 registers)
+        "ac_input_voltage": {
+            "register": 4000,
+            "length": 2,
+            "byte_order": "big",
+            "offset": 0,
+            "scale": 0.1,
+        },
+        "ac_input_current": {
+            "register": 4001,
+            "length": 2,
+            "byte_order": "big",
+            "offset": 2,
+            "scale": 0.01,
+        },
+        "ac_output_voltage": {
+            "register": 4002,
+            "length": 2,
+            "byte_order": "big",
+            "offset": 4,
+            "scale": 0.1,
+        },
+        "ac_output_current": {
+            "register": 4003,
+            "length": 2,
+            "byte_order": "big",
+            "offset": 6,
+            "scale": 0.01,
+        },
+        "ac_output_frequency": {
+            "register": 4004,
+            "length": 2,
+            "byte_order": "big",
+            "offset": 8,
+            "scale": 0.01,
+        },
+        "battery_voltage": {
+            "register": 4005,
+            "length": 2,
+            "byte_order": "big",
+            "offset": 10,
+            "scale": 0.1,
+        },
+        "temperature": {
+            "register": 4006,
+            "length": 2,
+            "byte_order": "big",
+            "offset": 12,
+            "scale": 0.1,
+        },
+        "input_frequency": {
+            "register": 4009,
+            "length": 2,
+            "byte_order": "big",
+            "offset": 18,
+            "scale": 0.01,
+        },
+        # Load info (register 4408, 6 registers) can be added as needed
+        # Device ID (register 4109)
+        "device_id": {"register": 4109, "length": 2, "byte_order": "big", "offset": 0},
+        # Model string (register 4311, 8 registers = 16 bytes)
+        "model": {
+            "register": 4311,
+            "length": 16,
+            "byte_order": "big",
+            "offset": 0,
+            "data_type": "string",
+        },
+    },
 }

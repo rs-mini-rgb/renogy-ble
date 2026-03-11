@@ -39,6 +39,8 @@ LOAD_CONTROL_REGISTER = 0x010A
 
 # Modbus commands for requesting data
 # Format: (function_code, start_register, word_count)
+
+# Add inverter support
 COMMANDS = {
     DEFAULT_DEVICE_TYPE: {
         "device_info": (3, 12, 8),
@@ -55,6 +57,12 @@ COMMANDS = {
         "parameters": (3, 57347, 18),  # 0xE003-0xE014 (18 words)
         "reverse_charging_voltage": (3, 57376, 1),  # 0xE020 (1 word)
         "solar_cutoff_current": (3, 57400, 1),  # 0xE038 (1 word)
+    },
+    "inverter": {
+        "main": (3, 4000, 32),  # Main sensors
+        "load": (3, 4408, 6),  # Load info
+        "device_id": (3, 4109, 1),
+        "model": (3, 4311, 8),
     },
 }
 
@@ -361,6 +369,8 @@ class RenogyBleClient:
 
     async def read_device(self, device: RenogyBLEDevice) -> RenogyBleReadResult:
         """Connect to a device, fetch data, and return parsed results."""
+
+        # Allow inverter device type
         commands = self._commands.get(device.device_type)
         if not commands:
             error = ValueError(f"Unsupported device type: {device.device_type}")
