@@ -13,6 +13,7 @@ import pytest
 
 # Import the modules to be tested
 from renogy_ble.parser import ControllerParser, RenogyBaseParser, parse_value
+from renogy_ble.renogy_parser import RenogyParser
 
 
 def test_parse_value_big_endian():
@@ -231,6 +232,68 @@ def integration_parser():
 
     # Clean up logger
     logger.removeHandler(log_handler)
+
+
+def _build_modbus_response(values: list[int], device_id: int = 0x20) -> bytes:
+    byte_count = len(values) * 2
+    payload = bytearray([device_id, 0x03, byte_count])
+    for value in values:
+        payload.extend(value.to_bytes(2, "big"))
+    payload.extend(b"\x00\x00")  # Placeholder CRC
+    return bytes(payload)
+
+
+def _build_modbus_string_response(
+    text: str, length: int, device_id: int = 0x20
+) -> bytes:
+    payload = bytearray([device_id, 0x03, length])
+    payload.extend(text.encode("ascii").ljust(length, b"\x00"))
+    payload.extend(b"\x00\x00")  # Placeholder CRC
+    return bytes(payload)
+
+
+def test_inverter_parser_maps_main_registers():
+    values = [0] * 10
+    values[2] = 2300  # 230.0 V
+    values[3] = 500  # 5.00 A
+    values[4] = 5000  # 50.00 Hz
+    values[5] = 520  # 52.0 V
+    values[6] = 253  # 25.3 C
+    values[9] = 6000  # 60.00 Hz
+
+    data = _build_modbus_response(values)
+    parsed = RenogyParser.parse(data, "inverter", 4000)
+
+    assert parsed["ac_output_voltage"] == 230.0
+    assert parsed["ac_output_current"] == 5.0
+    assert parsed["ac_output_frequency"] == 50.0
+    assert parsed["battery_voltage"] == 52.0
+    assert parsed["temperature"] == 25.3
+    assert parsed["input_frequency"] == 60.0
+
+
+def test_inverter_parser_maps_load_registers():
+    values = [100, 500, 550]
+    data = _build_modbus_response(values)
+    parsed = RenogyParser.parse(data, "inverter", 4408)
+
+    assert parsed["load_active_power"] == 500
+    assert parsed["load_apparent_power"] == 550
+
+
+def test_inverter_parser_maps_device_id():
+    values = [32]
+    data = _build_modbus_response(values)
+    parsed = RenogyParser.parse(data, "inverter", 4109)
+
+    assert parsed["device_id"] == 32
+
+
+def test_inverter_parser_maps_model_string():
+    data = _build_modbus_string_response("RIV1220PU-126", 16)
+    parsed = RenogyParser.parse(data, "inverter", 4311)
+
+    assert parsed["model"] == "RIV1220PU-126"
 
 
 def test_controller_parsing_register_12(integration_parser, integration_test_data):
