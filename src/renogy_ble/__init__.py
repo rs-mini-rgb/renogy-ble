@@ -25,6 +25,17 @@ from renogy_ble.ble import (
     modbus_crc,
 )
 from renogy_ble.renogy_parser import RenogyParser
+from renogy_ble.shunt import (
+    KEY_SHUNT_CURRENT,
+    KEY_SHUNT_ENERGY_CHARGED_TOTAL,
+    KEY_SHUNT_ENERGY_DISCHARGED_TOTAL,
+    KEY_SHUNT_POWER,
+    KEY_SHUNT_READING_VERIFIED,
+    KEY_SHUNT_SOC,
+    KEY_SHUNT_VOLTAGE,
+    ShuntBleClient,
+    parse_shunt_payload,
+)
 
 # Set up logging
 logging.basicConfig(
@@ -51,4 +62,13 @@ __all__ = [
     "create_modbus_read_request",
     "create_modbus_write_request",
     "modbus_crc",
+    "KEY_SHUNT_VOLTAGE",
+    "KEY_SHUNT_CURRENT",
+    "KEY_SHUNT_POWER",
+    "KEY_SHUNT_SOC",
+    "KEY_SHUNT_ENERGY_CHARGED_TOTAL",
+    "KEY_SHUNT_ENERGY_DISCHARGED_TOTAL",
+    "KEY_SHUNT_READING_VERIFIED",
+    "parse_shunt_payload",
+    "ShuntBleClient",
 ]

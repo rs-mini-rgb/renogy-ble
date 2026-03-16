@@ -14,6 +14,13 @@ import pytest
 # Import the modules to be tested
 from renogy_ble.parser import ControllerParser, RenogyBaseParser, parse_value
 from renogy_ble.renogy_parser import RenogyParser
+from renogy_ble.shunt import (
+    KEY_SHUNT_CURRENT,
+    KEY_SHUNT_POWER,
+    KEY_SHUNT_SOC,
+    KEY_SHUNT_VOLTAGE,
+    parse_shunt_payload,
+)
 
 
 def test_parse_value_big_endian():
@@ -294,6 +301,39 @@ def test_inverter_parser_maps_model_string():
     parsed = RenogyParser.parse(data, "inverter", 4311)
 
     assert parsed["model"] == "RIV1220PU-126"
+
+
+def _build_shunt_payload(
+    *,
+    voltage_mv: int,
+    current_ma: int,
+    soc_tenths: int,
+    battery_temp_tenths_c: int,
+) -> bytes:
+    payload = bytearray(110)
+    payload[0:4] = bytes.fromhex("42570119")
+    payload[21:24] = current_ma.to_bytes(3, "big", signed=True)
+    payload[25:28] = voltage_mv.to_bytes(3, "big", signed=False)
+    payload[34:36] = soc_tenths.to_bytes(2, "big", signed=False)
+    payload[66:68] = battery_temp_tenths_c.to_bytes(2, "big", signed=True)
+    return bytes(payload)
+
+
+def test_parse_shunt_payload_extracts_values():
+    payload = _build_shunt_payload(
+        voltage_mv=12500,
+        current_ma=1230,
+        soc_tenths=523,
+        battery_temp_tenths_c=251,
+    )
+
+    parsed = parse_shunt_payload(payload)
+
+    assert parsed is not None
+    assert parsed[KEY_SHUNT_VOLTAGE] == 12.5
+    assert parsed[KEY_SHUNT_CURRENT] == 1.23
+    assert parsed[KEY_SHUNT_POWER] == 15.38
+    assert parsed[KEY_SHUNT_SOC] == 52.3
 
 
 def test_controller_parsing_register_12(integration_parser, integration_test_data):
