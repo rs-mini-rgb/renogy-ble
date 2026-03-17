@@ -378,7 +378,8 @@ class RenogyBleClient:
             logger.error("%s", error)
             return RenogyBleReadResult(False, dict(device.parsed_data), error)
 
-        device.parsed_data.clear()
+        if device.device_type != "inverter":
+            device.parsed_data.clear()
 
         connection_kwargs = self._connection_kwargs()
         device_id = (
@@ -439,11 +440,14 @@ class RenogyBleClient:
 
                 word_count = cmd[2]
                 expected_len = 3 + word_count * 2 + 2
+                max_wait_time = self._max_notification_wait_time
+                if device.device_type == "inverter":
+                    max_wait_time = max(max_wait_time, 5.0)
                 start_time = asyncio.get_running_loop().time()
 
                 try:
                     while len(notification_data) < expected_len:
-                        remaining = self._max_notification_wait_time - (
+                        remaining = max_wait_time - (
                             asyncio.get_running_loop().time() - start_time
                         )
                         if remaining <= 0:
@@ -488,6 +492,8 @@ class RenogyBleClient:
                         cmd_name,
                         device.name,
                     )
+                if device.device_type == "inverter":
+                    await asyncio.sleep(0.2)
 
             await client.stop_notify(self._read_char_uuid)
             if not any_command_succeeded:
