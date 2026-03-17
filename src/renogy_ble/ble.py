@@ -30,6 +30,7 @@ MAX_NOTIFICATION_WAIT_TIME = 2.0
 
 # Default device ID for Renogy devices
 DEFAULT_DEVICE_ID = 0xFF
+INVERTER_DEVICE_ID = 0x20
 
 # Default device type
 DEFAULT_DEVICE_TYPE = "controller"
@@ -380,6 +381,9 @@ class RenogyBleClient:
         device.parsed_data.clear()
 
         connection_kwargs = self._connection_kwargs()
+        device_id = (
+            INVERTER_DEVICE_ID if device.device_type == "inverter" else self._device_id
+        )
         any_command_succeeded = False
         error: Exception | None = None
 
@@ -413,11 +417,19 @@ class RenogyBleClient:
 
             await client.start_notify(self._read_char_uuid, notification_handler)
 
+            if device.device_type == "inverter":
+                try:
+                    await client.read_gatt_char("0000ffd4-0000-1000-8000-00805f9b34fb")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "Inverter init read failed for %s: %s", device.name, exc
+                    )
+
             for cmd_name, cmd in commands.items():
                 notification_data.clear()
                 notification_event.clear()
 
-                modbus_request = create_modbus_read_request(self._device_id, *cmd)
+                modbus_request = create_modbus_read_request(device_id, *cmd)
                 logger.debug(
                     "Sending %s command: %s",
                     cmd_name,
@@ -438,6 +450,9 @@ class RenogyBleClient:
                             raise asyncio.TimeoutError()
                         await asyncio.wait_for(notification_event.wait(), remaining)
                         notification_event.clear()
+                        if len(notification_data) >= 3:
+                            byte_count = notification_data[2]
+                            expected_len = 3 + byte_count + 2
                 except asyncio.TimeoutError:
                     logger.info(
                         "Timeout – only %s / %s bytes received for %s from device %s",

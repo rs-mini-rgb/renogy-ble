@@ -30,6 +30,9 @@ KEY_SHUNT_POWER = "shunt_power"
 KEY_SHUNT_SOC = "shunt_soc"
 KEY_SHUNT_ENERGY_CHARGED_TOTAL = "energy_charged_total"
 KEY_SHUNT_ENERGY_DISCHARGED_TOTAL = "energy_discharged_total"
+KEY_SHUNT_STATUS_SOURCE = "status_source"
+KEY_SHUNT_ENERGY_SOURCE = "energy_source"
+KEY_SHUNT_VERBOSE = "verbose"
 KEY_SHUNT_DECODE_CONFIDENCE = "decode_confidence"
 KEY_SHUNT_READING_VERIFIED = "reading_verified"
 
@@ -92,6 +95,11 @@ def parse_shunt_payload(payload: bytes) -> dict[str, Any] | None:
         KEY_SHUNT_SOC: soc,
         KEY_SHUNT_ENERGY_CHARGED_TOTAL: None,
         KEY_SHUNT_ENERGY_DISCHARGED_TOTAL: None,
+        KEY_SHUNT_STATUS_SOURCE: "derived_current"
+        if current is not None
+        else "unknown",
+        KEY_SHUNT_ENERGY_SOURCE: "unknown",
+        KEY_SHUNT_VERBOSE: "0",
         KEY_SHUNT_DECODE_CONFIDENCE: "live_header",
         KEY_SHUNT_READING_VERIFIED: True,
         "starter_battery_voltage": starter_voltage,
@@ -239,6 +247,13 @@ class ShuntBleClient:
                 parsed_result[KEY_SHUNT_ENERGY_DISCHARGED_TOTAL] = round(
                     discharged_kwh, 3
                 )
+                parsed_result[KEY_SHUNT_STATUS_SOURCE] = (
+                    "derived_current"
+                    if parsed_result.get(KEY_SHUNT_CURRENT) is not None
+                    else "unknown"
+                )
+                parsed_result[KEY_SHUNT_ENERGY_SOURCE] = "integrated"
+                parsed_result.setdefault(KEY_SHUNT_VERBOSE, "0")
 
                 parsed_result["raw_payload"] = raw_payload.hex()
                 parsed_result["raw_words"] = [
