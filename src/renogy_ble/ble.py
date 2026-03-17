@@ -378,6 +378,9 @@ class RenogyBleClient:
             logger.error("%s", error)
             return RenogyBleReadResult(False, dict(device.parsed_data), error)
 
+        if device.device_type == "inverter":
+            return await self._read_inverter_device(device)
+
         if device.device_type != "inverter":
             device.parsed_data.clear()
 
@@ -521,6 +524,258 @@ class RenogyBleClient:
         return RenogyBleReadResult(
             any_command_succeeded, dict(device.parsed_data), error
         )
+
+    async def _read_inverter_device(
+        self, device: RenogyBLEDevice
+    ) -> RenogyBleReadResult:
+        """Read inverter data using a dedicated Modbus sequence."""
+        connection_kwargs = self._connection_kwargs()
+        error: Exception | None = None
+        any_command_succeeded = False
+        client = None
+
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                device.ble_device,
+                device.name or device.address,
+                max_attempts=self._max_attempts,
+                **connection_kwargs,
+            )
+        except (BleakError, asyncio.TimeoutError) as connection_error:
+            logger.info(
+                "Failed to establish connection with inverter %s: %s",
+                device.name,
+                str(connection_error),
+            )
+            return RenogyBleReadResult(
+                False, dict(device.parsed_data), connection_error
+            )
+
+        notification_event = asyncio.Event()
+        notification_data = bytearray()
+
+        def notification_handler(_sender, data):
+            notification_data.extend(data)
+            notification_event.set()
+
+        async def read_register(
+            register: int, word_count: int, timeout: float, retries: int = 1
+        ) -> bytes | None:
+            """Send a Modbus read request and collect the notification response."""
+            request = create_modbus_read_request(
+                INVERTER_DEVICE_ID, 3, register, word_count
+            )
+            for attempt in range(retries):
+                notification_data.clear()
+                notification_event.clear()
+                await client.write_gatt_char(self._write_char_uuid, request)
+
+                expected_len = 3 + word_count * 2 + 2
+                start_time = asyncio.get_running_loop().time()
+
+                try:
+                    while len(notification_data) < expected_len:
+                        remaining = timeout - (
+                            asyncio.get_running_loop().time() - start_time
+                        )
+                        if remaining <= 0:
+                            raise asyncio.TimeoutError()
+                        await asyncio.wait_for(notification_event.wait(), remaining)
+                        notification_event.clear()
+                        if len(notification_data) >= 3:
+                            byte_count = notification_data[2]
+                            expected_len = 3 + byte_count + 2
+                    return bytes(notification_data[:expected_len])
+                except asyncio.TimeoutError:
+                    if attempt < retries - 1:
+                        logger.debug(
+                            "Timeout waiting for inverter response register %s. "
+                            "Retrying (%s/%s).",
+                            register,
+                            attempt + 2,
+                            retries,
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
+                    logger.info(
+                        "Timeout – only %s / %s bytes received for "
+                        "inverter register %s",
+                        len(notification_data),
+                        expected_len,
+                        register,
+                    )
+                    return None
+
+            return None
+
+        try:
+            logger.debug("Connected to inverter %s", device.name)
+            await client.start_notify(self._read_char_uuid, notification_handler)
+            await asyncio.sleep(1.0)
+
+            try:
+                await client.read_gatt_char("0000ffd4-0000-1000-8000-00805f9b34fb")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Inverter init read failed for %s: %s", device.name, exc)
+
+            parsed: dict[str, Any] = {}
+
+            main_data = await read_register(4000, 32, timeout=10.0, retries=2)
+            if main_data:
+                parsed.update(self._parse_inverter_main_response(main_data))
+                any_command_succeeded = True
+
+            await asyncio.sleep(0.3)
+            load_data = await read_register(4408, 6, timeout=10.0)
+            if load_data:
+                parsed.update(self._parse_inverter_load_response(load_data))
+                any_command_succeeded = True
+
+            cached_device_id = device.parsed_data.get("device_id")
+            if cached_device_id is None:
+                await asyncio.sleep(0.3)
+                device_id_data = await read_register(4109, 1, timeout=10.0)
+                if device_id_data:
+                    parsed.update(
+                        self._parse_inverter_device_id_response(device_id_data),
+                    )
+                    any_command_succeeded = True
+            else:
+                parsed["device_id"] = cached_device_id
+
+            cached_model = device.parsed_data.get("model")
+            if cached_model is None:
+                await asyncio.sleep(0.3)
+                model_data = await read_register(4311, 8, timeout=10.0)
+                if model_data:
+                    parsed.update(self._parse_inverter_model_response(model_data))
+                    any_command_succeeded = True
+            else:
+                parsed["model"] = cached_model
+
+            if parsed:
+                device.parsed_data.update(parsed)
+
+            await client.stop_notify(self._read_char_uuid)
+
+            if not any_command_succeeded:
+                error = RuntimeError("No inverter commands completed successfully")
+
+        except BleakError as exc:
+            logger.info("BLE error with inverter %s: %s", device.name, str(exc))
+            error = exc
+        except Exception as exc:
+            logger.error(
+                "Error reading inverter data from device %s: %s", device.name, str(exc)
+            )
+            error = exc
+        finally:
+            if client is not None and client.is_connected:
+                try:
+                    await client.disconnect()
+                    logger.debug("Disconnected from inverter %s", device.name)
+                except Exception as exc:
+                    logger.debug(
+                        "Error disconnecting from inverter %s: %s",
+                        device.name,
+                        str(exc),
+                    )
+                    if error is None:
+                        error = exc
+
+        return RenogyBleReadResult(
+            any_command_succeeded, dict(device.parsed_data), error
+        )
+
+    @staticmethod
+    def _parse_inverter_main_response(data: bytes) -> dict[str, Any]:
+        """Parse Modbus response from register 4000 into inverter values."""
+        try:
+            if len(data) < 5:
+                logger.warning("Inverter response too short: %d bytes", len(data))
+                return {}
+
+            values: list[int] = []
+            for i in range(3, len(data) - 2, 2):
+                if i + 1 < len(data):
+                    values.append(int.from_bytes(data[i : i + 2], "big"))
+
+            if len(values) < 7:
+                logger.warning("Not enough inverter register values: %d", len(values))
+                return {}
+
+            parsed = {
+                "ac_input_voltage": values[0] * 0.1 if len(values) > 0 else None,
+                "ac_input_current": values[1] * 0.01 if len(values) > 1 else None,
+                "ac_output_voltage": values[2] * 0.1 if len(values) > 2 else None,
+                "ac_output_current": values[3] * 0.01 if len(values) > 3 else None,
+                "ac_output_frequency": values[4] * 0.01 if len(values) > 4 else None,
+                "battery_voltage": values[5] * 0.1 if len(values) > 5 else None,
+                "temperature": values[6] * 0.1 if len(values) > 6 else None,
+                "input_frequency": values[9] * 0.01 if len(values) > 9 else None,
+            }
+
+            return {key: value for key, value in parsed.items() if value is not None}
+        except Exception as exc:
+            logger.error("Error parsing inverter response: %s", exc, exc_info=True)
+            return {}
+
+    @staticmethod
+    def _parse_inverter_load_response(data: bytes) -> dict[str, Any]:
+        """Parse Modbus response from register 4408 into load values."""
+        try:
+            if len(data) < 5:
+                logger.warning("Inverter load response too short: %d bytes", len(data))
+                return {}
+
+            values: list[int] = []
+            for i in range(3, len(data) - 2, 2):
+                if i + 1 < len(data):
+                    values.append(int.from_bytes(data[i : i + 2], "big"))
+
+            if len(values) < 3:
+                return {}
+
+            parsed = {
+                "load_current": values[0] * 0.01 if len(values) > 0 else None,
+                "load_active_power": values[1] if len(values) > 1 else None,
+                "load_apparent_power": values[2] if len(values) > 2 else None,
+            }
+
+            return {key: value for key, value in parsed.items() if value is not None}
+        except Exception as exc:
+            logger.error("Error parsing inverter load response: %s", exc, exc_info=True)
+            return {}
+
+    @staticmethod
+    def _parse_inverter_device_id_response(data: bytes) -> dict[str, Any]:
+        """Parse Modbus response from register 4109 into device ID."""
+        try:
+            if len(data) < 5:
+                return {}
+            return {"device_id": int.from_bytes(data[3:5], "big")}
+        except Exception as exc:
+            logger.error("Error parsing inverter device id: %s", exc, exc_info=True)
+            return {}
+
+    @staticmethod
+    def _parse_inverter_model_response(data: bytes) -> dict[str, Any]:
+        """Parse Modbus response from register 4311 into model string."""
+        try:
+            if len(data) < 5:
+                return {}
+
+            if len(data) < 19:
+                logger.warning("Inverter model response too short: %d bytes", len(data))
+                return {}
+
+            model_bytes = data[3:19]
+            model = model_bytes.decode("ascii", errors="ignore").rstrip("\x00").strip()
+            return {"model": model}
+        except Exception as exc:
+            logger.error("Error parsing inverter model: %s", exc, exc_info=True)
+            return {}
 
     async def write_single_register(
         self,
